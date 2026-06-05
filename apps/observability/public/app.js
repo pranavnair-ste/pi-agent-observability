@@ -110,7 +110,7 @@ const helpOverlay = $("#help-overlay");
 // ─── Rich rendering helpers ─────────────────────────────────────────────────
 
 const ALL_TYPES = ["session_start","session_shutdown","agent_start","agent_end","turn_start","turn_end","user_message","assistant_message","tool_call","tool_result","thinking","model_change","compaction","branch_nav","error","custom"];
-const CHIP_TYPES = ["user_message","assistant_message","thinking","tool_call","tool_result","model_change","compaction","branch_nav","error"];
+const CHIP_TYPES = ["user_message","assistant_message","thinking","tool_call","tool_result","model_change","compaction","branch_nav","error","custom"];
 
 function summaryFor(evt) {
   const p = evt.payload ?? {};
@@ -141,7 +141,12 @@ function summaryFor(evt) {
     case "compaction": return `📦 compact · ${p.tokens_before ?? "?"} tk → "${trunc(p.summary_preview, 60)}"`;
     case "branch_nav": return `🌿 branch · ${shortId(p.from_id)} → ${shortId(p.to_id)}`;
     case "error": return `! ${trunc(p.message, 100)}`;
-    case "custom": return `${p.custom_type ?? "custom"}`;
+    case "custom": {
+      const d = p.data ?? {};
+      if (p.custom_type === "task_transition")
+        return `🗂 task ${trunc(d.subject || d.task_id || "?", 40)}: ${d.from ?? "new"} → ${d.to ?? "?"}`;
+      return `${p.custom_type ?? "custom"}`;
+    }
     default: return "";
   }
 }
