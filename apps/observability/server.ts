@@ -6,6 +6,7 @@
  */
 
 import { Database } from "bun:sqlite";
+import { timingSafeEqual } from "node:crypto";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { createDb, prepare, toRow, toSessionRow, rowToSession, rowToEvent } from "./db.js";
@@ -16,6 +17,34 @@ import type { ObsEvent } from "../../shared/types.js";
 
 const PORT = parseInt(process.env.OBS_PORT ?? "43190", 10);
 const HOST = process.env.OBS_HOST ?? "127.0.0.1";
+// Dev mode relaxes the auth/host guards below. Off unless explicitly opted in.
+const DEV = ["1", "true", "yes", "on"].includes((process.env.OBS_DEV ?? "").toLowerCase());
+
+// Refuse to boot with a missing/default/weak token unless OBS_DEV=1. This keeps
+// the auth wall meaningful: a known token ("devtoken"/"dev") is no token at all.
+if (!DEV && (!process.env.OBS_AUTH_TOKEN || ["devtoken", "dev"].includes(process.env.OBS_AUTH_TOKEN))) {
+  console.error(
+    "Refusing to start with a default/weak OBS_AUTH_TOKEN. Set a real token or OBS_DEV=1.",
+  );
+  process.exit(1);
+}
+
+// Port must be a valid TCP port.
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
+  console.error(`Invalid OBS_PORT: ${JSON.stringify(process.env.OBS_PORT ?? "")} — must be an integer in 1-65535.`);
+  process.exit(1);
+}
+
+// Binding to a non-loopback host exposes the server on the network. Warn loudly
+// unless the operator explicitly opted in via OBS_ALLOW_REMOTE.
+const ALLOW_REMOTE = ["1", "true", "yes", "on"].includes((process.env.OBS_ALLOW_REMOTE ?? "").toLowerCase());
+if (!["127.0.0.1", "::1", "localhost"].includes(HOST) && !ALLOW_REMOTE) {
+  console.warn(
+    `\n  ⚠️  OBS_HOST=${HOST} is not loopback — the observability server will be reachable from the network.\n` +
+      `      Set OBS_ALLOW_REMOTE=1 to silence this, and make sure OBS_AUTH_TOKEN is a strong secret.\n`,
+  );
+}
+
 // Resolve database path: if OBS_DB_PATH env is set, use it as is.
 // Otherwise, default to the "db/obs.db" directory relative to the project root.
 const PROJECT_ROOT = path.resolve(import.meta.dir, "../..");
@@ -121,20 +150,26 @@ function readTokenFromQuery(url: URL): string | null {
   return url.searchParams.get("token");
 }
 
+/** Constant-time string compare to avoid leaking the token via timing. */
+function safeEq(a: string, b: string): boolean {
+  const ab = Buffer.from(a), bb = Buffer.from(b);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
 function checkAuth(req: Request): boolean {
   // Check Authorization header
   const auth = req.headers.get("authorization");
   if (auth) {
     const parts = auth.split(" ");
-    if (parts.length === 2 && parts[0].toLowerCase() === "bearer" && parts[1] === AUTH_TOKEN) {
+    if (parts.length === 2 && parts[0].toLowerCase() === "bearer" && safeEq(parts[1], AUTH_TOKEN)) {
       return true;
     }
     return false;
   }
-  // Check ?token= query param
+  // Check ?token= query param (the browser SSE/EventSource client depends on this)
   const url = new URL(req.url);
   const qToken = url.searchParams.get("token");
-  if (qToken && qToken === AUTH_TOKEN) return true;
+  if (qToken && safeEq(qToken, AUTH_TOKEN)) return true;
 
   return false;
 }
