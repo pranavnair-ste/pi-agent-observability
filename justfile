@@ -2,7 +2,10 @@ set dotenv-load := true
 set shell := ["bash", "--login", "-e", "-o", "pipefail", "-c"]
 
 obs_port := env_var_or_default("OBS_PORT", "43190")
-obs_token := env_var_or_default("OBS_AUTH_TOKEN", "devtoken")
+# No "devtoken" default: an empty token + OBS_DEV=1 on the local recipes lets the
+# server pick a random per-boot token for local dev. Set OBS_AUTH_TOKEN to a real
+# secret anywhere it matters (and don't share screenshots that include ?token=…).
+obs_token := env_var_or_default("OBS_AUTH_TOKEN", "")
 obs_url := env_var_or_default("OBS_SERVER_URL", "http://127.0.0.1:" + obs_port)
 steelman_port := env_var_or_default("STEELMAN_PORT", "45210")
 steelman_web_port := env_var_or_default("STEELMAN_WEB_PORT", "51730")
@@ -34,17 +37,20 @@ _clear-port port name:
 #  OBSERVABILITY  —  the telemetry server (+ full-stack launcher)
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Boot the observability server only
+# Boot the observability server only. OBS_DEV=1 lets it boot without a real
+# OBS_AUTH_TOKEN for local dev (it picks a random per-boot token; see the banner).
 obs:
   @just _clear-port "{{obs_port}}" observability
-  @cd apps/observability && OBS_AUTH_TOKEN="{{obs_token}}" OBS_PORT="{{obs_port}}" bun server.ts
+  @cd apps/observability && OBS_DEV=1 OBS_AUTH_TOKEN="{{obs_token}}" OBS_PORT="{{obs_port}}" bun server.ts
 
 # Boot observability + Steelman backend + Steelman web together. Pass `watch` to auto-restart the backend on save.
 all watch="0":
   #!/usr/bin/env bash
   set -euo pipefail
   obs_port="${OBS_PORT:-43190}"
-  obs_token="${OBS_AUTH_TOKEN:-devtoken}"
+  # No "devtoken" default. If the operator didn't set a token, mint a random one
+  # for this boot so the obs server, the extension, and Steelman all share it.
+  obs_token="${OBS_AUTH_TOKEN:-$(openssl rand -hex 16 2>/dev/null || echo "dev-$RANDOM$RANDOM")}"
   obs_url="${OBS_SERVER_URL:-http://127.0.0.1:${obs_port}}"
   app_port="${STEELMAN_PORT:-45210}"
   web_port="${STEELMAN_WEB_PORT:-51730}"
